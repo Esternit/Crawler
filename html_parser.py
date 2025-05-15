@@ -1,6 +1,7 @@
 from bs4 import BeautifulSoup
 import re
 from datetime import datetime
+import logging
 
 class Parser:
     def __init__(self, base_url):
@@ -28,7 +29,24 @@ class Parser:
         soup = BeautifulSoup(html, 'html.parser')
         try:
             title = soup.find('h1').text.strip()
-            release_date = datetime.now().date()
+            
+            release_date = None
+            release_div = soup.find('div', {'data-testid': 'tm-box-up-date'})
+            if release_div:
+                date_text = release_div.text.strip()
+                try:
+                    date_parts = date_text.split()
+                    if len(date_parts) >= 4:
+                        month = date_parts[1]
+                        day = date_parts[2].rstrip(',')
+                        year = date_parts[3]
+                        release_date = datetime.strptime(f"{month} {day} {year}", "%B %d %Y").date()
+                except Exception as e:
+                    logging.warning(f"Failed to parse release date '{date_text}': {e}")
+            
+            if not release_date:
+                release_date = datetime.now().date()
+                
             country = 'USA'
             description = soup.find('span', {'data-testid': 'plot-l'}).text.strip() if soup.find('span', {'data-testid': 'plot-l'}) else None
             type_ = 'Movie'

@@ -54,7 +54,6 @@ class IMDbCrawler:
         await self.db.init_db()
         parsed_at = datetime.now()
 
-        # Clean up stale tasks at startup
         async with self.db.pool.acquire() as conn:
             await self.db.cleanup_stale_tasks(conn)
 
@@ -99,13 +98,17 @@ if __name__ == "__main__":
     try:
         loop.run_until_complete(crawler.run())
     finally:
-        if hasattr(crawler.db, 'pool'):
-            loop.run_until_complete(crawler.db.pool.close())
-        
-        pending = asyncio.all_tasks(loop)
-        for task in pending:
-            task.cancel()
-        
-        loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
-        loop.run_until_complete(loop.shutdown_asyncgens())
-        loop.close()
+        try:
+            if hasattr(crawler.db, 'pool'):
+                loop.run_until_complete(crawler.db.pool.close())
+            
+            pending = asyncio.all_tasks(loop)
+            for task in pending:
+                task.cancel()
+
+            if pending:
+                loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+            
+            loop.run_until_complete(loop.shutdown_asyncgens())
+        finally:
+            loop.close()
