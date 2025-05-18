@@ -1,6 +1,25 @@
 version: "3.8"
 
 services:
+  crawler:
+    image: esternit/crawler:latest
+    container_name: crawler-mtg
+    ports:
+      - "8081:8081"
+    networks:
+      - app-network
+    env_file:
+      - .env
+  api:
+    image: esternit/apicrawler:latest
+    depends_on:
+      - db
+    container_name: api-mtg
+    ports:
+      - "8080:8080"
+    networks:
+      - app-network
+
   db:
     image: postgres:latest
     environment:
@@ -14,3 +33,8 @@ services:
     restart: always
     ports:
       - "5432:5432"
+    networks:
+      - app-network
+networks:
+  app-network:
+    driver: bridge

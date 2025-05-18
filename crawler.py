@@ -56,34 +56,44 @@ class IMDbCrawler:
 
         async with self.db.pool.acquire() as conn:
             await self.db.cleanup_stale_tasks(conn)
+            
+            tasks_count = await conn.fetchval("""
+                SELECT COUNT(*) FROM crawler_task_status;
+            """)
+            
+            if tasks_count == 0:
+                async with aiohttp.ClientSession() as session:
+                    html = await self.fetch(session, IMDB_CALENDAR_URL)
+                    if not html:
+                        logging.error("Failed to fetch main calendar page")
+                        return
+
+                    links = self.parser.parse_calendar(html)
+                    logging.info(f"Found {len(links)} movie links from calendar")
+
+                    for link in links:
+                        await conn.execute("""
+                            INSERT INTO crawler_task_status (imdb_url, status)
+                            VALUES ($1, 'pending')
+                            ON CONFLICT (imdb_url) DO NOTHING;
+                        """, link)
 
         async with aiohttp.ClientSession() as session:
-            html = await self.fetch(session, IMDB_CALENDAR_URL)
-            if not html:
-                logging.error("Failed to fetch main calendar page")
-                return
-
-            links = self.parser.parse_calendar(html)
-            logging.info(f"Found {len(links)} movie links")
-
             async with self.db.pool.acquire() as conn:
-                for link in links:
-                    await conn.execute("""
-                        INSERT INTO crawler_task_status (imdb_url, status)
-                        VALUES ($1, 'pending')
-                        ON CONFLICT (imdb_url) DO NOTHING;
-                    """, link)
-
                 tasks = await conn.fetch("""
                     SELECT imdb_url 
                     FROM crawler_task_status 
                     WHERE status != 'in_progress';
                 """)
 
-            await asyncio.gather(*[
-                self.process_movie(session, task['imdb_url'])
-                for task in tasks
-            ])
+            if tasks:
+                logging.info(f"Processing {len(tasks)} tasks")
+                await asyncio.gather(*[
+                    self.process_movie(session, task['imdb_url'])
+                    for task in tasks
+                ])
+            else:
+                logging.info("No tasks to process")
 
         async with self.db.pool.acquire() as conn:
             await self.db.log_crawler_run(conn, parsed_at)
@@ -94,21 +104,25 @@ if __name__ == "__main__":
     
     crawler = IMDbCrawler(DB_URL, INSTANCE_NAME)
     
-    loop = asyncio.get_event_loop()
+    async def main():
+        logging.info("Waiting 10 seconds before first run...")
+        await asyncio.sleep(10)
+        
+        while True:
+            try:
+                logging.info("Starting crawler run...")
+                await crawler.run()
+                logging.info("Crawler run completed")
+            except Exception as e:
+                logging.error(f"Error during crawler run: {e}")
+            finally:
+                if hasattr(crawler.db, 'pool'):
+                    await crawler.db.pool.close()
+            
+            logging.info("Waiting for 1 hour before next run...")
+            await asyncio.sleep(3600)
+    
     try:
-        loop.run_until_complete(crawler.run())
-    finally:
-        try:
-            if hasattr(crawler.db, 'pool'):
-                loop.run_until_complete(crawler.db.pool.close())
-            
-            pending = asyncio.all_tasks(loop)
-            for task in pending:
-                task.cancel()
-
-            if pending:
-                loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
-            
-            loop.run_until_complete(loop.shutdown_asyncgens())
-        finally:
-            loop.close()
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        logging.info("Crawler stopped by user")
